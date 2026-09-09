@@ -1,0 +1,37 @@
+{
+  "name": "gloomberb-tv",
+  "version": "1.0.0",
+  "description": "Live Bloomberg, CNBC, and Yahoo Finance television for Gloomberb",
+  "type": "module",
+  "main": "index.ts",
+  "browser": "index.browser.ts",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gloom-sh/gloomberb-tv"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "youtubei.js": "17.0.1"
+  },
+  "peerDependencies": {
+    "gloomberb": ">=0.14.0",
+    "react": ">=19"
+  },
+  "peerDependenciesMeta": {
+    "gloomberb": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/react": "^19.2.7",
+    "typescript": "^5.9.3"
+  }
+}

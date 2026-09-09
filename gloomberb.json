@@ -1,0 +1,22 @@
+{
+  "id": "tv",
+  "name": "TV",
+  "icon": "icon.svg",
+  "tagline": "Live financial television alongside your research",
+  "description": "Live Bloomberg, CNBC, and Yahoo Finance television for Gloomberb",
+  "categories": [
+    "news",
+    "media"
+  ],
+  "targets": [
+    "cli",
+    "tui",
+    "desktop"
+  ],
+  "hosts": [
+    "youtube.com",
+    "googlevideo.com",
+    "ytimg.com"
+  ],
+  "minGloomberb": "0.14.0"
+}
