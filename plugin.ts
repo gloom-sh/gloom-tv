@@ -6,7 +6,7 @@ export const tvPlugin: GloomPlugin = {
   name: "TV",
   version: "1.0.0",
   description: "Live Bloomberg, CNBC, and Yahoo Finance television.",
-  homepage: "https://github.com/gloom-sh/gloomberb-tv",
+  homepage: "https://github.com/gloom-sh/gloom-tv",
   toggleable: true,
   targets: ["cli", "tui", "desktop"],
   panes: [{

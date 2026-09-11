@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "gloomberb-tv",
+      "name": "gloom-tv",
       "dependencies": {
         "youtubei.js": "17.0.1",
       },

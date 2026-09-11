@@ -1,5 +1,5 @@
 {
-  "name": "gloomberb-tv",
+  "name": "gloom-tv",
   "version": "1.0.0",
   "description": "Live Bloomberg, CNBC, and Yahoo Finance television for Gloomberb",
   "type": "module",
@@ -8,7 +8,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gloom-sh/gloomberb-tv"
+    "url": "https://github.com/gloom-sh/gloom-tv"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
