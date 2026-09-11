@@ -7,7 +7,7 @@ Live Bloomberg, CNBC, and Yahoo Finance television alongside your market researc
 This plugin requires the pane API and external TV migration in [Gloomberb #743](https://github.com/gloom-sh/gloomberb/pull/743), targeting Gloomberb 0.14.0. That host release is pending; released 0.13.3 is not supported.
 
 ```sh
-gloomberb install gloom-sh/gloomberb-tv
+gloomberb install gloom-sh/gloom-tv
 ```
 
 Open `TV` in the command bar. Existing Gloomberb installations restore this plugin once during the migration. Saved TV panes and their selected channels keep working because their pane and template IDs remain unchanged. A previously disabled TV/Macro plugin is not re-enabled, and deliberate removals are respected.
