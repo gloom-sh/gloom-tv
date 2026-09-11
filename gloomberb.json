@@ -18,5 +18,13 @@
     "googlevideo.com",
     "ytimg.com"
   ],
+  "contributes": {
+    "panes": [
+      "macro-tv"
+    ],
+    "capabilities": [
+      "tv.stream"
+    ]
+  },
   "minGloomberb": "0.14.0"
 }
