@@ -11,6 +11,13 @@ import { TV_STREAM_CAPABILITY_ID } from "./capability";
 
 type PlaybackState = "idle" | "loading" | "playing" | "paused" | "error";
 
+/** Re-resolve this long before expiry so playback never starts on a dead URL. */
+const MANIFEST_SAFETY_MARGIN_MS = 60_000;
+
+function isPlayableNow(stream: ResolvedLiveStream | null): stream is ResolvedLiveStream {
+  return !!stream && Date.now() < stream.expiresAt - MANIFEST_SAFETY_MARGIN_MS;
+}
+
 function activeWebOrigin(): string | undefined {
   const location = (globalThis as { window?: { location?: { protocol?: string; origin?: string } } }).window?.location;
   if (!location?.protocol || !location.origin) return undefined;
@@ -42,14 +49,13 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
   const [playbackState, setPlaybackState] = useState<PlaybackState>("idle");
   const [muted, setMuted] = useState(true);
   const mediaRef = useRef<MediaSurfaceHandle | null>(null);
-  const terminalAutoPlayedRef = useRef<string | null>(null);
   const recoveredStreamRef = useRef<string | null>(null);
   const generationRef = useRef(0);
   const channel = getTvChannel(channelId);
 
   usePaneTitle(`TV: ${channel.name}`);
 
-  const load = useCallback(async (force = false) => {
+  const load = useCallback(async (force = false): Promise<ResolvedLiveStream | null> => {
     const generation = ++generationRef.current;
     setLoading(true);
     setError(null);
@@ -58,12 +64,14 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
     setStream((current) => current?.sourceId === channel.id ? current : null);
     try {
       const nextStream = await capabilities.invokeCapability<ResolvedLiveStream>(TV_STREAM_CAPABILITY_ID, "resolve", { sourceId: channel.id, force });
-      if (generation !== generationRef.current) return;
+      if (generation !== generationRef.current) return null;
       setStream(nextStream);
+      return nextStream;
     } catch (cause) {
-      if (generation !== generationRef.current) return;
+      if (generation !== generationRef.current) return null;
       setStream(null);
       setError(cause instanceof Error ? cause.message : String(cause));
+      return null;
     } finally {
       if (generation === generationRef.current) setLoading(false);
     }
@@ -80,16 +88,18 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
     };
   }, [load]);
 
-  // Resolved YouTube manifests expire within minutes, so an open pane re-resolves
-  // shortly before the current one dies instead of playing into an error.
+  // Only the web player consumes a manifest it cannot renew on its own, so it is
+  // the only one that needs a timer. An embed URL never expires, and the terminal
+  // player owns its URL for the life of the process: re-resolving behind it would
+  // burn a YouTube round trip per pane without reaching the running player.
   useEffect(() => {
-    if (!stream) return;
-    const delay = Math.max(5_000, stream.expiresAt - 60_000 - Date.now());
+    if (!stream || !isDesktop || isYoutubeEmbedUrl(stream.manifestUrl)) return;
+    const delay = Math.max(5_000, stream.expiresAt - MANIFEST_SAFETY_MARGIN_MS - Date.now());
     const timer = setTimeout(() => {
       void load(true);
     }, delay);
     return () => clearTimeout(timer);
-  }, [load, stream]);
+  }, [isDesktop, load, stream]);
 
   // A dead manifest surfaces as a media error; re-resolve once per stream so a
   // silent expiry recovers without the user pressing anything.
@@ -109,25 +119,26 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
   }, [setChannelId]);
 
   const playInTerminal = useCallback(async () => {
-    if (!stream || !renderer.playTerminalMedia) return;
+    if (!renderer.playTerminalMedia) return;
     setPlaybackError(null);
+    // The URL has to be good at the moment the player starts, because it cannot be
+    // handed a new one afterwards. Resolution is cached, so this is usually free.
+    const playable = isPlayableNow(stream) ? stream : await load();
+    if (!playable) return;
     setPlaybackState("playing");
     try {
-      await renderer.playTerminalMedia(stream.manifestUrl, stream.title, { muted });
+      await renderer.playTerminalMedia(playable.manifestUrl, playable.title, { muted });
       setPlaybackState("paused");
     } catch (cause) {
       setPlaybackState("error");
       setPlaybackError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [muted, renderer, stream]);
+  }, [load, muted, renderer, stream]);
 
-  useEffect(() => {
-    if (isDesktop || loading || !stream || stream.sourceId !== channel.id) return;
-    const streamKey = `${stream.sourceId}:${stream.videoId}`;
-    if (terminalAutoPlayedRef.current === streamKey) return;
-    terminalAutoPlayedRef.current = streamKey;
-    void playInTerminal();
-  }, [channel.id, isDesktop, loading, playInTerminal, stream]);
+  // Terminal playback is never automatic. The player is a separate process that
+  // takes the whole terminal over, so starting one because a pane happens to be
+  // mounted would hijack any session that merely restored this pane from the
+  // saved layout, including one nobody is looking at. `p` starts it instead.
 
   // Closing the pane must take the player with it; the media process is not
   // tied to the React tree that started it.
