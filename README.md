@@ -15,7 +15,7 @@ Open `TV` in the command bar. Existing Gloomberb installations restore this plug
 ## Playback
 
 - Desktop: embedded video with playback and mute controls.
-- Terminal: Kitty-compatible video output through `mpv`. Install `mpv` with Kitty support; `yt-dlp` is not required. The app resumes when playback exits.
+- Terminal: Kitty-compatible video output through `mpv`, started with `p` or the Play button. Install `mpv` with Kitty support; `yt-dlp` is not required. Playback never starts on its own here, because the player takes the terminal over for as long as it runs. The app resumes when playback exits.
 - Hosted web: external plugins are not loaded by the hosted Gloomberb app.
 
 Press `1`, `2`, or `3` to change channels, `r` to refresh, `p` to play/pause, `m` to mute/unmute, and `o` to open the channel in your browser. The buttons and channel tabs also support the mouse.

@@ -49,7 +49,6 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
   const [playbackState, setPlaybackState] = useState<PlaybackState>("idle");
   const [muted, setMuted] = useState(true);
   const mediaRef = useRef<MediaSurfaceHandle | null>(null);
-  const terminalAutoPlayedRef = useRef<string | null>(null);
   const recoveredStreamRef = useRef<string | null>(null);
   const generationRef = useRef(0);
   const channel = getTvChannel(channelId);
@@ -136,13 +135,10 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
     }
   }, [load, muted, renderer, stream]);
 
-  useEffect(() => {
-    if (isDesktop || loading || !stream || stream.sourceId !== channel.id) return;
-    const streamKey = `${stream.sourceId}:${stream.videoId}`;
-    if (terminalAutoPlayedRef.current === streamKey) return;
-    terminalAutoPlayedRef.current = streamKey;
-    void playInTerminal();
-  }, [channel.id, isDesktop, loading, playInTerminal, stream]);
+  // Terminal playback is never automatic. The player is a separate process that
+  // takes the whole terminal over, so starting one because a pane happens to be
+  // mounted would hijack any session that merely restored this pane from the
+  // saved layout, including one nobody is looking at. `p` starts it instead.
 
   // Closing the pane must take the player with it; the media process is not
   // tied to the React tree that started it.
