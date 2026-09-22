@@ -1,7 +1,7 @@
 {
   "id": "tv",
   "name": "TV",
-  "icon": "icon.svg",
+  "icon": "icon.webp",
   "tagline": "Live financial television alongside your research",
   "description": "Live Bloomberg, CNBC, and Yahoo Finance television for Gloomberb",
   "categories": [
