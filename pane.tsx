@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Notice, PaneStatusBody, Tabs, usePaneFooter } from "gloomberb/components";
+import { Button, Notice, PaneStatusBody, Tabs, usePaneFooter, usePaneHeaderTabs } from "gloomberb/components";
 import { useCapabilityInvoker, usePaneSettingValue, usePaneTitle, useShortcut } from "gloomberb/react";
 import { colors } from "gloomberb/theme";
 import type { PaneProps } from "gloomberb/types/plugin";
@@ -246,20 +246,30 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
     label: `${index + 1} ${item.name}`,
     value: item.id,
   })), []);
-  const mediaHeight = Math.max(6, height - 1);
+  // The pane's only partition: on the desktop the chrome draws it in the title
+  // bar, which gives the video the row the strip used to take.
+  const tabsInHeader = usePaneHeaderTabs({
+    tabs: channelTabs,
+    activeValue: channelId,
+    onSelect: selectChannel,
+    focused,
+  });
+  const mediaHeight = Math.max(6, height - (tabsInHeader ? 0 : 1));
 
   return (
     <Box flexDirection="column" width={width} height={height}>
-      <Box height={1} paddingX={1}>
-        <Tabs
-          tabs={channelTabs}
-          activeValue={channelId}
-          onSelect={selectChannel}
-          compact
-          variant="bare"
-          focused={focused}
-        />
-      </Box>
+      {!tabsInHeader && (
+        <Box height={1} paddingX={1}>
+          <Tabs
+            tabs={channelTabs}
+            activeValue={channelId}
+            onSelect={selectChannel}
+            compact
+            variant="bare"
+            focused={focused}
+          />
+        </Box>
+      )}
 
       <PaneStatusBody
         loading={loading && !stream}
