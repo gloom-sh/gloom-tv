@@ -283,6 +283,9 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
       >
       {stream ? isDesktop ? (
         <MediaSurface
+          // A failed player keeps its fallback even when handed a new URL, so a
+          // re-resolved stream (Try again or the automatic recovery) remounts it.
+          key={stream.manifestUrl}
           src={webMediaSource(stream)}
           title={stream.title}
           poster={stream.posterUrl}
