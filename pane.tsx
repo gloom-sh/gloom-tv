@@ -53,7 +53,9 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
   const generationRef = useRef(0);
   const channel = getTvChannel(channelId);
 
-  usePaneTitle(`TV: ${channel.name}`);
+  // The active channel tab names the channel, so the title stays "TV". Setting
+  // it also replaces the "TV: <channel>" title older versions saved in layouts.
+  usePaneTitle("TV");
 
   const load = useCallback(async (force = false): Promise<ResolvedLiveStream | null> => {
     const generation = ++generationRef.current;
@@ -199,7 +201,7 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
   const streamKind = stream?.isLive === false ? "latest replay" : "live";
   const replayDetail = stream?.isLive === false && stream.publishedText ? ` · ${stream.publishedText}` : "";
   const status = loading
-    ? `resolving ${channel.name}`
+    ? "resolving"
     : error || playbackError
       ? "stream error"
       : playbackState === "playing"
@@ -224,7 +226,7 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
         key: "p",
         label: playbackState === "playing" ? "ause" : "lay",
         onPress: () => { void togglePlayback(); },
-        disabled: loading || !stream,
+        disabled: loading || !stream || (!isDesktop && !renderer.playTerminalMedia),
       },
       {
         id: "mute",
@@ -240,7 +242,7 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
         onPress: () => { void renderer.openExternal(channel.channelUrl); },
       },
     ],
-  }), [channel.channelUrl, error, loading, muted, paneId, playbackError, playbackState, refresh, renderer, status, stream, toggleMute, togglePlayback]);
+  }), [channel.channelUrl, error, isDesktop, loading, muted, paneId, playbackError, playbackState, renderer, status, stream, toggleMute, togglePlayback]);
 
   const channelTabs = useMemo(() => TV_CHANNELS.map((item, index) => ({
     label: `${index + 1} ${item.name}`,
@@ -255,6 +257,7 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
     focused,
   });
   const mediaHeight = Math.max(6, height - (tabsInHeader ? 0 : 1));
+  const retryAction = <Button label="Try again" variant="primary" onPress={refresh} />;
 
   return (
     <Box flexDirection="column" width={width} height={height}>
@@ -276,23 +279,27 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
         error={error ?? (!loading && !stream ? `${channel.name} is offline.` : null)}
         loadingLabel={`Resolving ${channel.name} live stream...`}
         align="center"
-        actions={<Button label="Try again" variant="primary" onPress={refresh} />}
+        actions={retryAction}
       >
       {stream ? isDesktop ? (
         <MediaSurface
+          // A failed player keeps its fallback even when handed a new URL, so a
+          // re-resolved stream (Try again or the automatic recovery) remounts it.
+          key={stream.manifestUrl}
           src={webMediaSource(stream)}
           title={stream.title}
           poster={stream.posterUrl}
           autoPlay
           muted={muted}
           mediaHandleRef={mediaRef}
-          height={mediaHeight}
           flexGrow={1}
+          flexBasis={0}
+          minHeight={0}
           onPlaybackStateChange={setPlaybackState}
           onMutedChange={setMuted}
           onError={handlePlaybackError}
         >
-          <PaneStatusBody error={playbackError ?? "Live video unavailable."} align="center" />
+          <PaneStatusBody error={playbackError ?? "Live video unavailable."} align="center" actions={retryAction} />
         </MediaSurface>
       ) : (
         <Box flexGrow={1} flexDirection="column" alignItems="center" justifyContent="center" gap={1}>
@@ -301,7 +308,7 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
             alt={stream.title}
             objectFit="contain"
             width="100%"
-            height={Math.max(5, mediaHeight - 2)}
+            height={Math.max(5, mediaHeight - (playbackError ? 2 : 0))}
           >
             <Box flexGrow={1} justifyContent="center" alignItems="center">
               <Text fg={colors.text}>{stream.title}</Text>
@@ -310,13 +317,6 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
               ) : null}
             </Box>
           </ImageSurface>
-          <Button
-            label="Play in Kitty"
-            shortcut="p"
-            variant="primary"
-            disabled={!renderer.playTerminalMedia}
-            onPress={() => void togglePlayback()}
-          />
           {playbackError ? <Notice tone="negative">{playbackError}</Notice> : null}
         </Box>
       ) : null}
