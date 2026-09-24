@@ -4,7 +4,7 @@ Live Bloomberg, CNBC, and Yahoo Finance television alongside your market researc
 
 ## Install
 
-This plugin requires Gloomberb 0.15.0 for title-bar tabs ([Gloomberb #1091](https://github.com/gloom-sh/gloomberb/pull/1091)). That host release is pending; released 0.14.x is not supported.
+This plugin requires Gloomberb 0.15.0 for title-bar tabs ([Gloomberb #1038](https://github.com/gloom-sh/gloomberb/pull/1038)). That host release is pending; released 0.14.x is not supported.
 
 ```sh
 gloomberb install gloom-sh/gloom-tv
