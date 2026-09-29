@@ -24,6 +24,13 @@
     ],
     "capabilities": [
       "tv.stream"
+    ],
+    "shortcuts": [
+      {
+        "code": "TV",
+        "name": "TV",
+        "description": "Live Bloomberg, CNBC and Yahoo Finance television."
+      }
     ]
   },
   "minGloom": "0.15.0"
