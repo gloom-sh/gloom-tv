@@ -4,7 +4,7 @@ Live Bloomberg, CNBC, and Yahoo Finance television alongside your market researc
 
 ## Install
 
-This plugin requires Gloomberb 0.15.0 for title-bar tabs ([Gloomberb #1038](https://github.com/gloom-sh/gloomberb/pull/1038)). That host release is pending; released 0.14.x is not supported.
+This plugin requires Gloomberb 0.15.0 or later for title-bar tabs ([Gloomberb #1038](https://github.com/gloom-sh/gloomberb/pull/1038)). To update an installed copy manually, run `gloom update gloom-tv`.
 
 ```sh
 gloomberb install gloom-sh/gloom-tv
@@ -18,9 +18,9 @@ Open `TV` in the command bar. Existing Gloomberb installations restore this plug
 - Terminal: Kitty-compatible video output through `mpv`, started with `p` or the `[p]lay` action in the pane footer. Install `mpv` with Kitty support; `yt-dlp` is not required. Playback never starts on its own here, because the player takes the terminal over for as long as it runs. The app resumes when playback exits.
 - Hosted web: external plugins are not loaded by the hosted Gloomberb app.
 
-Press `1`, `2`, or `3` to change channels, `r` to refresh, `p` to play/pause, `m` to mute/unmute, and `o` to open the channel in your browser. The footer actions and channel tabs also support the mouse. When a stream cannot be resolved, or the desktop player cannot play it, the pane shows the reason with a Try again button.
+Press `1`, `2`, or `3` to change channels, `r` to refresh, `p` to play/pause, `m` to mute/unmute, and `o` to open the channel in your browser. The footer actions and channel tabs also support the mouse. If a stream can't play in the desktop app, select **Open in browser** to watch it there or **Try again** to retry in the pane.
 
-Public stream availability depends on YouTube, the channel, your location, and consent requirements. Stream URLs are refreshed before expiry; playback failures trigger one recovery attempt per video.
+Public stream availability depends on YouTube, the channel, your location, and consent requirements. The desktop player refreshes stream URLs before expiry and tries to recover once per video after a playback failure, unless the format is unsupported.
 
 ## Development
 

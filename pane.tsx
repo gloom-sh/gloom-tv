@@ -6,7 +6,8 @@ import type { PaneProps } from "gloomberb/types/plugin";
 import { Box, ImageSurface, MediaSurface, Text, useRendererHost, useUiHost, type MediaSurfaceHandle } from "gloomberb/ui";
 import { getTvChannel, TV_CHANNELS, type TvChannelId } from "./channels";
 import type { ResolvedLiveStream } from "./types";
-import { buildYoutubeLiveEmbedUrl, isYoutubeEmbedUrl } from "./youtube-embed";
+import { isYoutubeEmbedUrl } from "./youtube-embed";
+import { desktopMediaSource, desktopPlaybackFailure, isIncompatibleCodecError } from "./desktop-playback";
 import { TV_STREAM_CAPABILITY_ID } from "./capability";
 
 type PlaybackState = "idle" | "loading" | "playing" | "paused" | "error";
@@ -22,18 +23,6 @@ function activeWebOrigin(): string | undefined {
   const location = (globalThis as { window?: { location?: { protocol?: string; origin?: string } } }).window?.location;
   if (!location?.protocol || !location.origin) return undefined;
   return /^https?:$/.test(location.protocol) ? location.origin : undefined;
-}
-
-function webMediaSource(stream: ResolvedLiveStream): string {
-  if (!isYoutubeEmbedUrl(stream.manifestUrl)) return stream.manifestUrl;
-  const origin = activeWebOrigin();
-  // Autoplay requires starting muted; unmuting afterwards goes through the
-  // iframe postMessage API so the URL (and therefore the player) stays stable.
-  return buildYoutubeLiveEmbedUrl(stream.videoId, {
-    muted: true,
-    origin,
-    widgetReferrer: origin,
-  });
 }
 
 export function TvPane({ paneId, focused, width, height }: PaneProps) {
@@ -107,6 +96,7 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
   // silent expiry recovers without the user pressing anything.
   const handlePlaybackError = useCallback((message: string) => {
     setPlaybackError(message);
+    if (isIncompatibleCodecError(message)) return;
     const streamKey = stream ? `${stream.sourceId}:${stream.videoId}` : null;
     if (!streamKey || recoveredStreamRef.current === streamKey) return;
     recoveredStreamRef.current = streamKey;
@@ -258,6 +248,11 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
   });
   const mediaHeight = Math.max(6, height - (tabsInHeader ? 0 : 1));
   const retryAction = <Button label="Try again" variant="primary" onPress={refresh} />;
+  const desktopFailure = desktopPlaybackFailure(playbackError, stream?.watchUrl ?? channel.channelUrl);
+  const desktopErrorActions = <>
+    <Button label={desktopFailure.open.label} variant="primary" onPress={() => { void renderer.openExternal(desktopFailure.open.url); }} />
+    <Button label="Try again" onPress={refresh} />
+  </>;
 
   return (
     <Box flexDirection="column" width={width} height={height}>
@@ -279,14 +274,14 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
         error={error ?? (!loading && !stream ? `${channel.name} is offline.` : null)}
         loadingLabel={`Resolving ${channel.name} live stream...`}
         align="center"
-        actions={retryAction}
+        actions={isDesktop ? desktopErrorActions : retryAction}
       >
       {stream ? isDesktop ? (
         <MediaSurface
           // A failed player keeps its fallback even when handed a new URL, so a
           // re-resolved stream (Try again or the automatic recovery) remounts it.
           key={stream.manifestUrl}
-          src={webMediaSource(stream)}
+          src={desktopMediaSource(stream, activeWebOrigin())}
           title={stream.title}
           poster={stream.posterUrl}
           autoPlay
@@ -299,7 +294,7 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
           onMutedChange={setMuted}
           onError={handlePlaybackError}
         >
-          <PaneStatusBody error={playbackError ?? "Live video unavailable."} align="center" actions={retryAction} />
+          <PaneStatusBody error={desktopFailure.message} align="center" actions={desktopErrorActions} />
         </MediaSurface>
       ) : (
         <Box flexGrow={1} flexDirection="column" alignItems="center" justifyContent="center" gap={1}>
