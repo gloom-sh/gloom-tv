@@ -6,6 +6,7 @@ export interface ResolvedLiveStream {
   isLive?: boolean;
   publishedText?: string;
   manifestUrl: string;
+  compatibleUrl?: string;
   watchUrl: string;
   posterUrl?: string;
   resolvedAt: number;

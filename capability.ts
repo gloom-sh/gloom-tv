@@ -3,7 +3,7 @@ import { TV_CHANNELS, type TvChannel } from "./channels";
 import type { ResolvedLiveStream } from "./types";
 
 export const TV_STREAM_CAPABILITY_ID = "tv.stream";
-type StreamResolver = (channel: TvChannel, options: { force: boolean }) => Promise<ResolvedLiveStream>;
+type StreamResolver = (channel: TvChannel, options: { force: boolean; compatible: boolean }) => Promise<ResolvedLiveStream>;
 
 /** Native resolution is invoked through the same capability API on every renderer. */
 export function createTvStreamCapability(resolve: StreamResolver): PluginCapability {
@@ -17,14 +17,15 @@ export function createTvStreamCapability(resolve: StreamResolver): PluginCapabil
         rendererSafe: true,
         input: {
           parse(value: unknown) {
-            const input = value as { sourceId?: unknown; force?: unknown } | null;
+            const input = value as { sourceId?: unknown; force?: unknown; compatible?: unknown } | null;
             const channel = TV_CHANNELS.find(({ id }) => id === input?.sourceId);
             if (!channel) throw new Error("Unknown TV channel.");
             if (input?.force !== undefined && typeof input.force !== "boolean") throw new Error("force must be a boolean.");
-            return { channel, force: input?.force === true };
+            if (input?.compatible !== undefined && typeof input.compatible !== "boolean") throw new Error("compatible must be a boolean.");
+            return { channel, force: input?.force === true, compatible: input?.compatible === true };
           },
         },
-        handler: ({ channel, force }) => resolve(channel, { force }),
+        handler: ({ channel, force, compatible }) => resolve(channel, { force, compatible }),
       },
     },
   };
