@@ -12,9 +12,6 @@
         "@types/react": "^19.2.7",
         "typescript": "^5.9.3",
       },
-      "optionalDependencies": {
-        "@seydx/node-av-ffmpeg-lgpl-win32-x64": "7.1.0",
-      },
       "peerDependencies": {
         "gloomberb": ">=0.15.0",
         "react": ">=19",
@@ -27,8 +24,6 @@
   },
   "packages": {
     "@bufbuild/protobuf": ["@bufbuild/protobuf@2.14.1", "", {}, "sha512-agRJn3+EJDUe8AvxTx/LnHA/GErvLE62pSaSk7+MwFOtOv8eWBu/qCq2qoZjBjVZ3C2aiFJCveuSs17KMkYGOw=="],
-
-    "@seydx/node-av-ffmpeg-lgpl-win32-x64": ["@seydx/node-av-ffmpeg-lgpl-win32-x64@7.1.0", "", { "os": "win32", "cpu": "x64" }, "sha512-6lhB3VGRYxDd8kodIW6wDeNtaSwp9FyDYLXqYDWjSNVaCeSWYETYrHgwOuhXvQ6TRR5ioyDwhAgThKQWHXQnkQ=="],
 
     "@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 

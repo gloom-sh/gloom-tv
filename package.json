@@ -17,9 +17,6 @@
   "dependencies": {
     "youtubei.js": "17.0.1"
   },
-  "optionalDependencies": {
-    "@seydx/node-av-ffmpeg-lgpl-win32-x64": "7.1.0"
-  },
   "peerDependencies": {
     "gloomberb": ">=0.15.0",
     "react": ">=19"
