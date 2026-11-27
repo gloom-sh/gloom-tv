@@ -11,6 +11,14 @@ import { desktopMediaSource, desktopPlaybackFailure, isIncompatibleCodecError } 
 import { TV_STREAM_CAPABILITY_ID } from "./capability";
 
 type PlaybackState = "idle" | "loading" | "playing" | "paused" | "error";
+type LoadMode = "initial" | "refresh" | "retry";
+
+const INITIAL_MEDIA: {
+  stream: ResolvedLiveStream | null;
+  attempt: number;
+  playbackError: string | null;
+  playbackState: PlaybackState;
+} = { stream: null, attempt: 0, playbackError: null, playbackState: "idle" };
 
 /** Re-resolve this long before expiry so playback never starts on a dead URL. */
 const MANIFEST_SAFETY_MARGIN_MS = 60_000;
@@ -31,14 +39,13 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
   const capabilities = useCapabilityInvoker();
   const [storedChannelId, setChannelId] = usePaneSettingValue<TvChannelId>("channelId", "bloomberg");
   const channelId = TV_CHANNELS.find(({ id }) => id === storedChannelId)?.id ?? "bloomberg";
-  const [stream, setStream] = useState<ResolvedLiveStream | null>(null);
+  const [media, setMedia] = useState(INITIAL_MEDIA);
+  const { stream, attempt, playbackError, playbackState } = media;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [playbackError, setPlaybackError] = useState<string | null>(null);
-  const [playbackState, setPlaybackState] = useState<PlaybackState>("idle");
   const [muted, setMuted] = useState(true);
   const mediaRef = useRef<MediaSurfaceHandle | null>(null);
-  const recoveredStreamRef = useRef<string | null>(null);
+  const recoveredRef = useRef(false);
   const generationRef = useRef(0);
   const channel = getTvChannel(channelId);
 
@@ -46,21 +53,34 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
   // it also replaces the "TV: <channel>" title older versions saved in layouts.
   usePaneTitle("TV");
 
-  const load = useCallback(async (force = false): Promise<ResolvedLiveStream | null> => {
+  const setPlaybackState = useCallback((playbackState: PlaybackState) => {
+    setMedia((current) => current.playbackState === playbackState ? current : { ...current, playbackState });
+  }, []);
+
+  const setPlaybackError = useCallback((playbackError: string | null) => {
+    setMedia((current) => current.playbackError === playbackError ? current : { ...current, playbackError });
+  }, []);
+
+  const load = useCallback(async (mode: LoadMode = "initial"): Promise<ResolvedLiveStream | null> => {
     const generation = ++generationRef.current;
+    if (mode !== "refresh") recoveredRef.current = false;
     setLoading(true);
     setError(null);
-    setPlaybackError(null);
-    setPlaybackState("idle");
-    setStream((current) => current?.sourceId === channel.id ? current : null);
+    setMedia((current) => mode !== "retry" && current.stream?.sourceId === channel.id
+      ? current
+      : { ...INITIAL_MEDIA, attempt: current.attempt + 1 });
     try {
-      const nextStream = await capabilities.invokeCapability<ResolvedLiveStream>(TV_STREAM_CAPABILITY_ID, "resolve", { sourceId: channel.id, force });
+      const nextStream = await capabilities.invokeCapability<ResolvedLiveStream>(TV_STREAM_CAPABILITY_ID, "resolve", {
+        sourceId: channel.id, force: mode !== "initial",
+      });
       if (generation !== generationRef.current) return null;
-      setStream(nextStream);
+      setMedia((current) => current.stream?.manifestUrl === nextStream.manifestUrl && current.stream.sourceId === nextStream.sourceId
+        ? { ...current, stream: nextStream }
+        : { ...INITIAL_MEDIA, attempt: current.attempt, stream: nextStream });
       return nextStream;
     } catch (cause) {
       if (generation !== generationRef.current) return null;
-      setStream(null);
+      setMedia((current) => ({ ...INITIAL_MEDIA, attempt: current.attempt }));
       setError(cause instanceof Error ? cause.message : String(cause));
       return null;
     } finally {
@@ -68,8 +88,8 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
     }
   }, [capabilities, channel]);
 
-  const refresh = useCallback(() => {
-    void load(true);
+  const retry = useCallback(() => {
+    void load("retry");
   }, [load]);
 
   useEffect(() => {
@@ -83,25 +103,25 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
   // the only one that needs a timer. An embed URL never expires, and the terminal
   // player owns its URL for the life of the process: re-resolving behind it would
   // burn a YouTube round trip per pane without reaching the running player.
+  const manifestUrl = stream?.manifestUrl;
+  const expiresAt = stream?.expiresAt;
   useEffect(() => {
-    if (!stream || !isDesktop || isYoutubeEmbedUrl(stream.manifestUrl)) return;
-    const delay = Math.max(5_000, stream.expiresAt - MANIFEST_SAFETY_MARGIN_MS - Date.now());
+    if (!manifestUrl || !expiresAt || !isDesktop || playbackError || isYoutubeEmbedUrl(manifestUrl)) return;
+    const delay = Math.max(5_000, expiresAt - MANIFEST_SAFETY_MARGIN_MS - Date.now());
     const timer = setTimeout(() => {
-      void load(true);
+      void load("refresh");
     }, delay);
     return () => clearTimeout(timer);
-  }, [isDesktop, load, stream]);
+  }, [expiresAt, isDesktop, load, manifestUrl, playbackError]);
 
-  // A dead manifest surfaces as a media error; re-resolve once per stream so a
-  // silent expiry recovers without the user pressing anything.
+  // A dead manifest can recover with a fresh URL. A channel visit or a manual
+  // retry gets one automatic resolution, even if successive failures change IDs.
   const handlePlaybackError = useCallback((message: string) => {
     setPlaybackError(message);
-    if (isIncompatibleCodecError(message)) return;
-    const streamKey = stream ? `${stream.sourceId}:${stream.videoId}` : null;
-    if (!streamKey || recoveredStreamRef.current === streamKey) return;
-    recoveredStreamRef.current = streamKey;
-    void load(true);
-  }, [load, stream]);
+    if (!manifestUrl || isIncompatibleCodecError(message) || recoveredRef.current) return;
+    recoveredRef.current = true;
+    void load("refresh");
+  }, [load, manifestUrl, setPlaybackError]);
 
   const selectChannel = useCallback((nextId: string) => {
     if (TV_CHANNELS.some((item) => item.id === nextId)) {
@@ -125,7 +145,7 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
       setPlaybackState("error");
       setPlaybackError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [load, muted, renderer, stream]);
+  }, [load, muted, renderer, setPlaybackError, setPlaybackState, stream]);
 
   // Terminal playback is never automatic. The player is a separate process that
   // takes the whole terminal over, so starting one because a pane happens to be
@@ -137,10 +157,10 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
   useEffect(() => () => renderer.stopTerminalMedia?.(), [renderer]);
 
   const togglePlayback = useCallback(async () => {
-    setPlaybackError(null);
     try {
       if (isDesktop) {
-        await mediaRef.current?.toggle();
+        if (playbackError || playbackState === "error") retry();
+        else await mediaRef.current?.toggle();
       } else {
         await playInTerminal();
       }
@@ -148,7 +168,7 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
       setPlaybackState("error");
       setPlaybackError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [isDesktop, playInTerminal]);
+  }, [isDesktop, playbackError, playbackState, playInTerminal, retry, setPlaybackError, setPlaybackState]);
 
   const toggleMute = useCallback(() => {
     if (isDesktop) {
@@ -169,7 +189,8 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
     }
     if (event.name === "r") {
       event.preventDefault?.();
-      refresh();
+      if (!stream || playbackError || playbackState === "error") retry();
+      else void load("refresh");
       return;
     }
     if (event.name === "p" && stream) {
@@ -190,9 +211,10 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
 
   const streamKind = stream?.isLive === false ? "latest replay" : "live";
   const replayDetail = stream?.isLive === false && stream.publishedText ? ` · ${stream.publishedText}` : "";
+  const failed = !!error || !!playbackError || playbackState === "error";
   const status = loading
     ? "resolving"
-    : error || playbackError
+    : failed
       ? "stream error"
       : playbackState === "playing"
         ? `playing ${streamKind}${replayDetail}`
@@ -207,7 +229,7 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
       id: "tv-status",
       parts: [{
         text: status,
-        tone: error || playbackError ? "warning" : playbackState === "playing" ? "positive" : "value",
+        tone: failed ? "warning" : playbackState === "playing" ? "positive" : "value",
       }],
     }],
     hints: [
@@ -232,7 +254,7 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
         onPress: () => { void renderer.openExternal(channel.channelUrl); },
       },
     ],
-  }), [channel.channelUrl, error, isDesktop, loading, muted, paneId, playbackError, playbackState, renderer, status, stream, toggleMute, togglePlayback]);
+  }), [channel.channelUrl, failed, isDesktop, loading, muted, paneId, playbackState, renderer, status, stream, toggleMute, togglePlayback]);
 
   const channelTabs = useMemo(() => TV_CHANNELS.map((item, index) => ({
     label: `${index + 1} ${item.name}`,
@@ -247,11 +269,11 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
     focused,
   });
   const mediaHeight = Math.max(6, height - (tabsInHeader ? 0 : 1));
-  const retryAction = <Button label="Try again" variant="primary" onPress={refresh} />;
+  const retryAction = <Button label="Try again" variant="primary" onPress={retry} />;
   const desktopFailure = desktopPlaybackFailure(playbackError, stream?.watchUrl ?? channel.channelUrl);
   const desktopErrorActions = <>
     <Button label={desktopFailure.open.label} variant="primary" onPress={() => { void renderer.openExternal(desktopFailure.open.url); }} />
-    <Button label="Try again" onPress={refresh} />
+    <Button label="Try again" onPress={retry} />
   </>;
 
   return (
@@ -278,9 +300,7 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
       >
       {stream ? isDesktop ? (
         <MediaSurface
-          // A failed player keeps its fallback even when handed a new URL, so a
-          // re-resolved stream (Try again or the automatic recovery) remounts it.
-          key={stream.manifestUrl}
+          key={`${attempt}:${stream.manifestUrl}`}
           src={desktopMediaSource(stream, activeWebOrigin())}
           title={stream.title}
           poster={stream.posterUrl}
