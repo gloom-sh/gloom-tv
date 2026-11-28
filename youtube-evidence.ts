@@ -121,15 +121,17 @@ function isWatchPageChallenge(html: string, url: URL, player: unknown, videoId: 
   for (const [, attributes] of markup.matchAll(/<form\b([^>]*)>/gi)) {
     if (attributes && challengeForm(attributes, url)) return true;
   }
-  const playerTitle = visibleText(text(field(player, "videoDetails", "title")) ?? "");
-  for (const [, , content] of markup.matchAll(/<(title|h[1-3])\b[^>]*>([\s\S]*?)<\/\1\s*>/gi)) {
+  const headings = /<(title|h[1-3])\b[^>]*>([\s\S]*?)<\/\1\s*>/gi;
+  const playerTitle = scoped && visibleText(text(field(player, "videoDetails", "title")) ?? "");
+  const documentMarkup = playerTitle ? markup.replace(headings, (element, _tag: string, content: string) =>
+    visibleText(content).replace(/\s+-\s+YouTube$/i, "") === playerTitle ? " " : element) : markup;
+  for (const [, , content] of documentMarkup.matchAll(headings)) {
     const heading = visibleText(content ?? "");
-    if (scoped && playerTitle && heading.replace(/\s+-\s+YouTube$/i, "") === playerTitle) continue;
     if (SIGN_IN_CHALLENGE.test(heading) || CONSENT_CHALLENGE.test(heading) || BOT_CHALLENGE.test(heading)) return true;
   }
-  if (scoped || videoOnly) return false;
-  const body = visibleText(markup);
-  return SIGN_IN_CHALLENGE.test(body) || SITE_SIGN_IN_COPY.test(body) || CONSENT_CHALLENGE.test(body) || BOT_CHALLENGE.test(body);
+  const body = visibleText(documentMarkup);
+  if (SITE_SIGN_IN_COPY.test(body) || CONSENT_CHALLENGE.test(body) || BOT_CHALLENGE.test(body)) return true;
+  return !scoped && !videoOnly && SIGN_IN_CHALLENGE.test(body);
 }
 
 export function verifyWatchVideo(html: string, url: URL, channelId: string, isLive: boolean, expectedVideoId?: string): VerifiedVideo | undefined {
