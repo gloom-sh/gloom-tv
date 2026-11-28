@@ -86,7 +86,7 @@ async function fetchYoutubePage(url: string, fetchImpl: typeof fetch, kind: "liv
   }
   const html = await response.text();
   const pageUrl = publicPageUrl(response);
-  if (pageUrl.pathname !== "/watch" && /Before you continue to YouTube/i.test(html)) {
+  if (pageUrl.pathname !== "/watch" && /(?:Before you continue to YouTube|consent\.youtube\.com)/i.test(html)) {
     throw new Error("YouTube returned a consent page.");
   }
   if (response.status === 404 && kind !== "videos") return;

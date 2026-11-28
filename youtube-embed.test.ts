@@ -166,6 +166,18 @@ test("rejects unavailable, consent and sign-in pages", async () => {
   }
 });
 
+for (const tab of ["live", "videos"] as const) {
+  test(`a consent-host form on /${tab} stops without an English banner`, async () => {
+    const channelUrl = `https://www.youtube.com/channel/${channel.channelId}`;
+    const consent = { html: '<form action="https://consent.youtube.com/save"><button>Tout accepter</button></form>' };
+    const fetchPage = tab === "live" ? youtubePages(consent) : youtubePages({}, consent);
+    await expect(resolveYoutubeLivePage(channel, fetchPage)).rejects.toThrow("consent page");
+    expect(fetchPage.mock.calls.map(([request]) => request)).toEqual(
+      tab === "live" ? [`${channelUrl}/live`] : [`${channelUrl}/live`, `${channelUrl}/videos`],
+    );
+  });
+}
+
 test("watch probes skip mismatched player IDs, owners and live status without using their labels", async () => {
   const wrongOwner = "bcdefghijkl";
   const liveVideo = "defghijklmn";
@@ -250,6 +262,26 @@ function ageDeniedWatch(videoId: string, isLive: boolean) {
   return page({ player: { ...playerResponse(videoId, channel.channelId, { isLive }), playabilityStatus: ageDenial } });
 }
 
+for (const [kind, html, stop] of [
+  ["a video-local denial", ageDeniedWatch(liveId, false), false],
+  ["a playable video", publicWatch(liveId, channel.channelId, "Not the requested candidate").html, false],
+  ["a site-wide challenge", ageDeniedWatch(liveId, false) + `<main>${brandedSignIn}</main>`, true],
+] as const) {
+  test(`a probe redirected to a different video with ${kind} does not select that video`, async () => {
+    const fetchPage = youtubePages({}, probeGrid, { url: watch(liveId), html }, publicWatch(replayId, channel.channelId, "Own replay"));
+    const result = resolveYoutubeLivePage(channel, fetchPage);
+    const channelUrl = `https://www.youtube.com/channel/${channel.channelId}`;
+    const calls = [`${channelUrl}/live`, `${channelUrl}/videos`, watch(otherId)];
+    if (stop) {
+      await expect(result).rejects.toThrow("page-wide access challenge");
+    } else {
+      await expect(result).resolves.toMatchObject({ videoId: replayId, title: "Own replay", isLive: false });
+      calls.push(watch(replayId));
+    }
+    expect(fetchPage.mock.calls.map(([request]) => request)).toEqual(calls);
+  });
+}
+
 for (const [kind, html] of [
   ["sign-in page", '<title>Sign in - YouTube</title><h1>Sign in</h1>'],
   ["sign-in body", '<title>YouTube</title><main><div>Sign in to continue to YouTube</div></main>'],
@@ -301,6 +333,7 @@ for (const route of ["direct probe", "/live redirect", "/videos redirect"] as co
     ["unbranded consent form alongside a matching denial", "stop", denied + '<main>Before you continue<form action="https://consent.youtube.com/save"></form></main>'],
     ["branded sign-in copy alongside a matching denial", "stop", denied + `<main>${brandedSignIn}</main>`],
     ["unbranded sign-in copy alongside a matching denial", "stop", denied + `<main><strong>${bareSignIn}</strong></main>`],
+    ["a nested standalone sign-in prompt with explanatory copy", "stop", denied + `<main><div><div>${bareSignIn}</div><p>Use your Google Account</p></div></main>`],
     ["a video-local denial with normal navigation and video-local text", "fallback", denied + normalNavigation + '<main>Sign in to continue watching this video</main>'],
     ["challenge copy in script data", "select", page({
       player: playerResponse(videoId, channel.channelId, { isLive, title: "Own video" }),
