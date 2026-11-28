@@ -79,12 +79,20 @@ function initialJson(html: string, key: "ytInitialData" | "ytInitialPlayerRespon
   return found;
 }
 
-export function findWatchLive(html: string, url: URL, channelId: string): VerifiedVideo | undefined {
+export function watchVideoId(url: URL): string | undefined {
   const [videoId, ...extraIds] = url.searchParams.getAll("v");
-  if (extraIds.length || !isValidYoutubeVideoId(videoId)) return;
-  const player = initialJson(html, "ytInitialPlayerResponse");
-  const details = object(player?.videoDetails);
-  const playability = object(player?.playabilityStatus);
+  if (url.pathname === "/watch" && !extraIds.length && isValidYoutubeVideoId(videoId)) return videoId;
+}
+
+export function verifyWatchVideo(html: string, url: URL, channelId: string, videoId: string, isLive: boolean): VerifiedVideo | undefined {
+  if (watchVideoId(url) !== videoId) return;
+  return verifyPlayerVideo(initialJson(html, "ytInitialPlayerResponse"), channelId, videoId, isLive, true);
+}
+
+export function verifyPlayerVideo(payload: unknown, channelId: string, videoId: string, isLive: boolean, requiresEmbed: boolean): VerifiedVideo | undefined {
+  const player = field(payload, "playerResponse") ?? payload;
+  const details = object(field(player, "videoDetails"));
+  const playability = object(field(player, "playabilityStatus"));
   const microformat = object(field(player, "microformat", "playerMicroformatRenderer"));
   const broadcast = object(microformat?.liveBroadcastDetails);
   const streamId = field(playability, "liveStreamability", "liveStreamabilityRenderer", "videoId");
@@ -92,16 +100,20 @@ export function findWatchLive(html: string, url: URL, channelId: string): Verifi
   const liveFlags = [details?.isLive, broadcast?.isLiveNow].filter((flag) => flag !== undefined);
   const title = string(details?.title);
   if (details?.videoId !== videoId || details.channelId !== channelId || !title
-    || !liveFlags.length || liveFlags.some((flag) => flag !== true) || broadcast?.endTimestamp
-    || details.isUpcoming === true || details.isPrivate === true || details.isPostLiveDvr === true || microformat?.isUnlisted === true
-    || playability?.status !== "OK" || playability.playableInEmbed !== true || playability.errorScreen
+    || liveFlags.some((flag) => flag !== isLive)
+    || details.isUpcoming === true || details.isPrivate === true || microformat?.isUnlisted === true
+    || playability?.status !== "OK" || playability.errorScreen || (requiresEmbed && playability.playableInEmbed !== true)
     || (streamId !== undefined && streamId !== videoId)
     || (microformat?.externalChannelId !== undefined && microformat.externalChannelId !== channelId)
     || (profileId !== undefined && profileId !== channelId)) return;
-  return { videoId, title, isLive: true };
+  if (isLive) {
+    if (!liveFlags.length || broadcast?.endTimestamp || details.isPostLiveDvr === true) return;
+  } else if (!liveFlags.length && !broadcast?.endTimestamp
+    && (details.isLiveContent === true || !/^[1-9]\d*$/.test(string(details.lengthSeconds) ?? ""))) return;
+  return { videoId, title, isLive };
 }
 
-const PUBLISHED_LABEL = /^(?:\d+\s+\w+\s+ago|Streamed\b.+|Premiered\b.+)$/i;
+const PUBLISHED_LABEL = /^(?:\d+(?:\s+\w+|s|m|h|d|w|mo|y)\s+ago|Streamed\b.+|Premiered\b.+)$/i;
 const DURATION = /^\d+(?::\d{2}){1,2}$/;
 
 function channelGridCards(data: JsonObject | undefined, channelId: string, isLive: boolean): unknown[] {
@@ -137,7 +149,7 @@ function verifyCard(card: JsonObject, videoId: string, channelId: string, isLive
   if (!title || field(endpoint, "watchEndpoint", "videoId") !== videoId
     || (card.videoId !== undefined && card.videoId !== videoId)
     || (lockup && card.contentType !== "LOCKUP_CONTENT_TYPE_VIDEO")
-    || (status !== undefined && status !== "OK")
+    || (status !== undefined && status !== "OK") || field(card.playabilityStatus, "playableInEmbed") === false
     || card.isPlayable === false || card.playableInEmbed === false || card.isPrivate === true
     || card.isUpcoming === true || card.upcomingEventData) return;
 
@@ -154,7 +166,10 @@ function verifyCard(card: JsonObject, videoId: string, channelId: string, isLive
   const badges = list(card.badges).map((badge) => field(badge, "metadataBadgeRenderer"));
   const stamps = list(card.thumbnailOverlays).map((overlay) => field(overlay, "thumbnailOverlayTimeStatusRenderer"));
   const overlays = list(field(card, "contentImage", "thumbnailViewModel", "overlays"));
-  const thumbnailBadges = overlays.flatMap((overlay) => list(field(overlay, "thumbnailOverlayBadgeViewModel", "thumbnailBadges")))
+  const thumbnailBadges = overlays.flatMap((overlay) => [
+    ...list(field(overlay, "thumbnailOverlayBadgeViewModel", "thumbnailBadges")),
+    ...list(field(overlay, "thumbnailBottomOverlayViewModel", "badges")),
+  ])
     .map((badge) => field(badge, "thumbnailBadgeViewModel"));
   const styles = [...badges, ...stamps].map((badge) => field(badge, "style"))
     .concat(thumbnailBadges.map((badge) => field(badge, "badgeStyle")));
@@ -170,9 +185,9 @@ function verifyCard(card: JsonObject, videoId: string, channelId: string, isLive
   return { videoId, title, isLive, publishedText: dates[0] };
 }
 
-export function findGridVideo(html: string, url: URL, channelId: string, isLive: boolean): VerifiedVideo | undefined {
+export function gridVideoCandidates(html: string, url: URL, channelId: string, isLive: boolean): VerifiedVideo[] {
   const pageChannelId = channelIdInUrl(url);
-  if (pageChannelId !== undefined && pageChannelId !== channelId) return;
+  if (pageChannelId !== undefined && pageChannelId !== channelId) return [];
   const videos = new Map<string, VerifiedVideo | undefined>();
   for (const item of channelGridCards(initialJson(html, "ytInitialData"), channelId, isLive)) {
     const card = object(field(item, "lockupViewModel") ?? field(item, "videoRenderer") ?? field(item, "gridVideoRenderer"));
@@ -181,5 +196,5 @@ export function findGridVideo(html: string, url: URL, channelId: string, isLive:
       videos.set(videoId, videos.has(videoId) ? undefined : verifyCard(card, videoId, channelId, isLive));
     }
   }
-  return [...videos.values()].find((video) => video !== undefined);
+  return [...videos.values()].filter((video) => video !== undefined);
 }

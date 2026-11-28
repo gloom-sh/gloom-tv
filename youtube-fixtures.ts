@@ -60,3 +60,7 @@ export function youtubePages(...pages: { html?: string; url?: string; status?: n
   });
   return Object.assign(fetchPage, { preconnect: fetch.preconnect });
 }
+
+export function publicWatch(videoId: string, channelId: string, title: string, isLive = false) {
+  return { html: page({ player: playerResponse(videoId, channelId, { title, isLive }) }) };
+}

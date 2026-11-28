@@ -1,7 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { TV_CHANNELS, type TvChannel } from "./channels";
 import type { ResolvedLiveStream } from "./types";
 import { resolveYoutubeLivePage } from "./youtube-embed";
-import { isValidYoutubeVideoId } from "./youtube-evidence";
+import { isValidYoutubeVideoId, verifyPlayerVideo } from "./youtube-evidence";
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_LIVE_CANDIDATES = 6;
@@ -16,6 +17,19 @@ type YoutubeClient = InstanceType<YoutubeModule["Innertube"]>;
 let clientPromise: Promise<YoutubeClient> | null = null;
 const streamCache = new Map<TvChannel["id"], ResolvedTvStream>();
 const activeResolutions = new Map<TvChannel["id"], Promise<ResolvedTvStream>>();
+const playerResponse = new AsyncLocalStorage<{ raw?: unknown }>();
+
+async function fetchWithPlayerResponse(...[input, init]: Parameters<typeof fetch>) {
+  const response = await fetch(input, init);
+  const capture = playerResponse.getStore();
+  if (capture && response.ok) {
+    const url = new URL(input instanceof Request ? input.url : input);
+    if (url.origin === "https://www.youtube.com" && url.pathname === "/youtubei/v1/player") {
+      capture.raw = await response.clone().json().catch(() => undefined);
+    }
+  }
+  return response;
+}
 
 async function getYoutubeClient(): Promise<{ client: YoutubeClient; module: YoutubeModule }> {
   const module = await import("youtubei.js");
@@ -23,6 +37,7 @@ async function getYoutubeClient(): Promise<{ client: YoutubeClient; module: Yout
   clientPromise ??= module.Innertube.create({
     generate_session_locally: true,
     enable_session_cache: true,
+    fetch: Object.assign(fetchWithPlayerResponse, { preconnect: fetch.preconnect }),
   });
   return { client: await clientPromise, module };
 }
@@ -79,15 +94,13 @@ async function resolveLiveStream(channel: TvChannel): Promise<ResolvedTvStream> 
     if (!isValidYoutubeVideoId(videoId) || idCounts.get(videoId) !== 1 || (tap && tap.payload.videoId !== videoId)
       || ownerIds.some((owner) => typeof owner === "string" && owner.startsWith("UC") && owner !== channel.channelId)) continue;
 
-    const info = await client.getBasicInfo(videoId, { client: "ANDROID" }).catch(() => null);
+    const capture: { raw?: unknown } = {};
+    const info = await playerResponse.run(capture, () => client.getBasicInfo(videoId, { client: "ANDROID" })).catch(() => null);
     const manifestUrl = info?.streaming_data?.hls_manifest_url;
     const details = info?.basic_info;
-    const title = details?.title?.trim();
-    if (!info || !manifestUrl || !title || details?.id !== videoId || details.channel_id !== channel.channelId
-      || (details.channel?.id !== undefined && details.channel.id !== channel.channelId)
-      || details.is_live !== true || details.is_upcoming || details.is_private || details.is_unlisted
-      || details.is_post_live_dvr || details.end_timestamp
-      || info.playability_status?.status !== "OK" || info.playability_status.error_screen) continue;
+    const verified = verifyPlayerVideo(capture.raw, channel.channelId, videoId, true, false);
+    if (!info || !manifestUrl || !verified || details?.id !== videoId
+      || details.channel_id !== channel.channelId || details.is_live !== true) continue;
 
     const thumbnails = details.thumbnail ?? [];
     const poster = thumbnails.reduce<(typeof thumbnails)[number] | undefined>((best, item) => {
@@ -101,7 +114,7 @@ async function resolveLiveStream(channel: TvChannel): Promise<ResolvedTvStream> 
       provider: "youtube",
       sourceId: channel.id,
       videoId,
-      title,
+      title: verified.title,
       isLive: true,
       manifestUrl,
       watchUrl: `https://www.youtube.com/watch?v=${videoId}`,

@@ -1,6 +1,9 @@
 import type { ResolvedLiveStream } from "./types";
 import type { TvChannel } from "./channels";
-import { findGridVideo, findWatchLive, isValidYoutubeVideoId, youtubePageUrl } from "./youtube-evidence";
+import { gridVideoCandidates, isValidYoutubeVideoId, verifyWatchVideo, watchVideoId, youtubePageUrl } from "./youtube-evidence";
+
+const MAX_WATCH_CHECKS = 6;
+const MAX_LIVE_WATCH_CHECKS = 3;
 
 export function buildYoutubeLiveEmbedUrl(
   videoId: string,
@@ -49,19 +52,17 @@ export function fallbackTvStream(
   };
 }
 
-async function fetchYoutubePage(url: string, fetchImpl: typeof fetch): Promise<{ pageUrl: URL; html: string }> {
+async function fetchYoutubePage(url: string, fetchImpl: typeof fetch, kind: "live" | "videos" | "watch"): Promise<{ pageUrl: URL; html: string } | undefined> {
   const response = await fetchImpl(url, {
     headers: {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
       "Accept-Language": "en-US,en;q=0.9",
-      "Cookie": "CONSENT=YES+cb.20210328-17-p0.en+FX+667",
+      ...(kind !== "watch" ? { "Cookie": "CONSENT=YES+cb.20210328-17-p0.en+FX+667" } : {}),
     },
+    ...(kind === "watch" ? { credentials: "omit" } : {}),
     redirect: "follow",
   });
-  if (!response.ok) {
-    throw new Error(`YouTube live page is unavailable (${response.status}).`);
-  }
   const html = await response.text();
   if (response.url.startsWith("https://consent.youtube.com/") || /Before you continue to YouTube/i.test(html)) {
     throw new Error("YouTube returned a consent page.");
@@ -70,6 +71,8 @@ async function fetchYoutubePage(url: string, fetchImpl: typeof fetch): Promise<{
   if (!pageUrl || !/^\/(?:watch$|channel\/|@|c\/|user\/)/.test(pageUrl.pathname)) {
     throw new Error("YouTube did not return a public channel or watch page.");
   }
+  if (response.status === 404 && kind !== "videos") return;
+  if (!response.ok) throw new Error(`YouTube ${kind} page is unavailable (${response.status}).`);
   return { pageUrl, html };
 }
 
@@ -78,14 +81,25 @@ export async function resolveYoutubeLivePage(
   fetchImpl: typeof fetch = fetch,
 ): Promise<ResolvedLiveStream> {
   const baseUrl = `https://www.youtube.com/channel/${channel.channelId}`;
-  const livePage = await fetchYoutubePage(`${baseUrl}/live`, fetchImpl);
-  const live = livePage.pageUrl.pathname === "/watch"
-    ? findWatchLive(livePage.html, livePage.pageUrl, channel.channelId)
-    : findGridVideo(livePage.html, livePage.pageUrl, channel.channelId, true);
-  if (live) return fallbackTvStream(channel, live);
-
-  const videosPage = await fetchYoutubePage(`${baseUrl}/videos`, fetchImpl);
-  const replay = videosPage.pageUrl.pathname !== "/watch" && findGridVideo(videosPage.html, videosPage.pageUrl, channel.channelId, false);
-  if (replay) return fallbackTvStream(channel, replay);
+  let checksLeft = MAX_WATCH_CHECKS;
+  for (const kind of ["live", "videos"] as const) {
+    const page = await fetchYoutubePage(`${baseUrl}/${kind}`, fetchImpl, kind);
+    if (!page) continue;
+    const isLive = kind === "live";
+    if (page.pageUrl.pathname === "/watch") {
+      const videoId = watchVideoId(page.pageUrl);
+      const live = isLive && videoId && verifyWatchVideo(page.html, page.pageUrl, channel.channelId, videoId, true);
+      if (live) return fallbackTvStream(channel, live);
+      continue;
+    }
+    const candidates = gridVideoCandidates(page.html, page.pageUrl, channel.channelId, isLive);
+    for (const candidate of candidates.slice(0, isLive ? MAX_LIVE_WATCH_CHECKS : checksLeft)) {
+      checksLeft--;
+      const watch = await fetchYoutubePage(`https://www.youtube.com/watch?v=${candidate.videoId}`, fetchImpl, "watch");
+      if (!watch) continue;
+      const verified = verifyWatchVideo(watch.html, watch.pageUrl, channel.channelId, candidate.videoId, isLive);
+      if (verified) return fallbackTvStream(channel, { ...verified, publishedText: candidate.publishedText });
+    }
+  }
   throw new Error(`${channel.name} does not currently have a verified public video.`);
 }
