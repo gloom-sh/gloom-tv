@@ -88,6 +88,7 @@ const BOT_CHALLENGE = /\b(?:unusual traffic|automated (?:traffic|queries)|(?:ver
 const CONSENT_CHALLENGE = /\b(?:before you continue to (?:YouTube|Google)|review your privacy choices)\b/i;
 const SIGN_IN_CHALLENGE = /^sign in(?: required| to (?:continue(?: to (?:YouTube|Google))?|YouTube|Google)(?:[.!])?|\s*[-–|]\s*(?:YouTube|Google Accounts))?$/i;
 const SITE_SIGN_IN_COPY = /\bsign in to continue to (?:YouTube|Google)\b/i;
+const STANDALONE_SIGN_IN_PROMPT = /^sign in to continue[.!]?$/i;
 
 function visibleText(markup: string): string {
   return markup.replace(/<[^>]*>/g, " ").replace(/&(?:apos|rsquo|#39|#x27|#8217);|’/gi, "'")
@@ -131,6 +132,9 @@ function isWatchPageChallenge(html: string, url: URL, player: unknown, videoId: 
   }
   const body = visibleText(documentMarkup);
   if (SITE_SIGN_IN_COPY.test(body) || CONSENT_CHALLENGE.test(body) || BOT_CHALLENGE.test(body)) return true;
+  for (const [, content] of documentMarkup.matchAll(/<main\b[^>]*>([\s\S]*?)<\/main\s*>/gi)) {
+    if (STANDALONE_SIGN_IN_PROMPT.test(visibleText(content ?? ""))) return true;
+  }
   return !scoped && !videoOnly && SIGN_IN_CHALLENGE.test(body);
 }
 

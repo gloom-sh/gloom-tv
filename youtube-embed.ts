@@ -85,10 +85,10 @@ async function fetchYoutubePage(url: string, fetchImpl: typeof fetch, kind: "liv
     return { pageUrl, html: await (body ? new Response(body) : response).text() };
   }
   const html = await response.text();
-  if (/Before you continue to YouTube/i.test(html)) {
+  const pageUrl = publicPageUrl(response);
+  if (pageUrl.pathname !== "/watch" && /Before you continue to YouTube/i.test(html)) {
     throw new Error("YouTube returned a consent page.");
   }
-  const pageUrl = publicPageUrl(response);
   if (response.status === 404 && kind !== "videos") return;
   if (!response.ok) throw new Error(`YouTube ${kind} page is unavailable (${response.status}).`);
   return { pageUrl, html };

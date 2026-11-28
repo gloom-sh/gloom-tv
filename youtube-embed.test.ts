@@ -155,6 +155,9 @@ for (const [name, data] of [
 
 test("rejects unavailable, consent and sign-in pages", async () => {
   await expect(resolveYoutubeLivePage(channel, youtubePages({ status: 503 }))).rejects.toThrow("unavailable (503)");
+  const channelConsent = youtubePages({ html: '<main>Before you continue to YouTube</main>' });
+  await expect(resolveYoutubeLivePage(channel, channelConsent)).rejects.toThrow("consent page");
+  expect(channelConsent).toHaveBeenCalledTimes(1);
   const html = page({ player: playerResponse(liveId, channel.channelId) });
   for (const url of ["https://consent.youtube.com/m", "https://accounts.google.com/signin", "https://www.youtube.com/signin"]) {
     const fetchPage = youtubePages({ html, url });
@@ -235,7 +238,10 @@ for (const stage of ["fetch", "body"] as const) {
   });
 }
 
-const siteSignInCopy = '<main>Sign in to continue to YouTube</main>';
+const brandedSignIn = "Sign in to continue to YouTube";
+const bareSignIn = "Sign in to continue";
+const consentCopy = "Before you continue to YouTube";
+const normalNavigation = '<nav><a href="/signin">Sign in</a></nav>';
 const ageDenial = {
   status: "LOGIN_REQUIRED", reason: "Sign in to confirm your age", errorScreen: { playerErrorMessageRenderer: {} },
 };
@@ -247,8 +253,7 @@ function ageDeniedWatch(videoId: string, isLive: boolean) {
 for (const [kind, html] of [
   ["sign-in page", '<title>Sign in - YouTube</title><h1>Sign in</h1>'],
   ["sign-in body", '<title>YouTube</title><main><div>Sign in to continue to YouTube</div></main>'],
-  ["sign-in body alongside a matching video denial", ageDeniedWatch(otherId, false) + siteSignInCopy],
-  ["sign-in body alongside a video-only reason without player details", page({ player: { playabilityStatus: ageDenial } }) + siteSignInCopy],
+  ["sign-in body alongside a video-only reason without player details", page({ player: { playabilityStatus: ageDenial } }) + `<main>${brandedSignIn}</main>`],
   ["consent form", '<form action="https://consent.youtube.com/save"><button>Accept all</button></form>'],
   ["anti-bot page", '<h1>Verify you’re human</h1><form id="captcha-form" action="/sorry/index"></form>'],
   ["unscoped login challenge", page({ player: { playabilityStatus: { status: "LOGIN_REQUIRED", reason: "Sign in to continue" } } })],
@@ -264,15 +269,7 @@ for (const [kind, html] of [
   });
 }
 
-test("a structured denial for the requested video still allows a verified next candidate", async () => {
-  const fetchPage = youtubePages({}, probeGrid, { html: ageDeniedWatch(otherId, false) }, publicWatch(replayId, channel.channelId, "Own replay"));
-  await expect(resolveYoutubeLivePage(channel, fetchPage)).resolves.toMatchObject({ videoId: replayId, title: "Own replay" });
-  expect(fetchPage.mock.calls.slice(2).map(([url]) => url)).toEqual([watch(otherId), watch(replayId)]);
-});
-
 for (const [kind, url, html] of [
-  ["sign-in page", watch(liveId), '<title>YouTube</title>' + siteSignInCopy],
-  ["sign-in page alongside a matching video denial", watch(liveId), ageDeniedWatch(liveId, true) + siteSignInCopy],
   ["anti-bot page with a malformed ID", watch("invalid"), '<h1>Verify you’re human</h1>'],
   ["unscoped login challenge with no ID", "https://www.youtube.com/watch", page({ player: {
     playabilityStatus: { status: "LOGIN_REQUIRED", reason: "Authentication required" },
@@ -291,22 +288,49 @@ test("a /videos redirect to a challenged watch page also hard-stops", async () =
   expect(fetchPage).toHaveBeenCalledTimes(2);
 });
 
-test("a video-specific denial after a /live redirect still allows a verified replay", async () => {
-  const videos = { html: page({ data: channelGrid(channel.channelId, "videos", [replayCard(replayId, "Grid title", "3 days ago")]) }) };
-  const fetchPage = youtubePages({ url: watch(liveId), html: ageDeniedWatch(liveId, true) }, videos, publicWatch(replayId, channel.channelId, "Own replay"));
-  await expect(resolveYoutubeLivePage(channel, fetchPage)).resolves.toMatchObject({ videoId: replayId, title: "Own replay", isLive: false, publishedText: "3 days ago" });
-  expect(fetchPage.mock.calls.map(([request]) => request)).toEqual([
-    `https://www.youtube.com/channel/${channel.channelId}/live`, `https://www.youtube.com/channel/${channel.channelId}/videos`, watch(replayId),
-  ]);
-});
+for (const route of ["direct probe", "/live redirect", "/videos redirect"] as const) {
+  const isLive = route === "/live redirect";
+  const videoId = isLive ? liveId : otherId;
+  const denied = ageDeniedWatch(videoId, isLive);
+  const fallbackGrid = { html: page({ data: channelGrid(channel.channelId, "videos", [replayCard(replayId, "Grid title", "3 days ago")]) }) };
+  const liveUrl = `https://www.youtube.com/channel/${channel.channelId}/live`;
+  const videosUrl = `https://www.youtube.com/channel/${channel.channelId}/videos`;
 
-test("normal sign-in navigation, a matching video title and script copy do not stop verification", async () => {
-  const title = "Sign in to continue to YouTube";
-  const html = page({
-    player: playerResponse(liveId, channel.channelId, { title }),
-    data: { recommendation: "Verify you're not a bot" },
-  }).replace("Generic document title", title) + `<nav><a href="/signin">Sign in</a></nav><h1>${title}</h1>`;
-  const fetchPage = youtubePages({ url: watch(liveId), html });
-  await expect(resolveYoutubeLivePage(channel, fetchPage)).resolves.toMatchObject({ videoId: liveId, title });
-  expect(fetchPage).toHaveBeenCalledTimes(1);
-});
+  for (const [label, outcome, html, title] of [
+    ["consent copy alongside a matching denial", "stop", denied + `<main>${consentCopy}</main>`],
+    ["unbranded consent form alongside a matching denial", "stop", denied + '<main>Before you continue<form action="https://consent.youtube.com/save"></form></main>'],
+    ["branded sign-in copy alongside a matching denial", "stop", denied + `<main>${brandedSignIn}</main>`],
+    ["unbranded sign-in copy alongside a matching denial", "stop", denied + `<main><strong>${bareSignIn}</strong></main>`],
+    ["a video-local denial with normal navigation and video-local text", "fallback", denied + normalNavigation + '<main>Sign in to continue watching this video</main>'],
+    ["challenge copy in script data", "select", page({
+      player: playerResponse(videoId, channel.channelId, { isLive, title: "Own video" }),
+      data: { recommendation: consentCopy, prompt: bareSignIn, error: "Verify you're not a bot" },
+    }) + normalNavigation, "Own video"],
+    ...[consentCopy, brandedSignIn, bareSignIn].map((title) => [
+      `a matching video title reading '${title}'`, "select",
+      page({ player: playerResponse(videoId, channel.channelId, { isLive, title }) }).replace("Generic document title", title)
+        + normalNavigation + `<main><h1>${title}</h1></main>`, title,
+    ] as const),
+  ] as const) {
+    test(`${route}: ${label}`, async () => {
+      const response = { url: watch(videoId), html };
+      const replay = publicWatch(replayId, channel.channelId, "Own replay");
+      const fetchPage = isLive ? youtubePages(response, fallbackGrid, replay)
+        : route === "/videos redirect" ? youtubePages({}, response) : youtubePages({}, probeGrid, response, replay);
+      const calls = isLive ? [liveUrl] : route === "/videos redirect" ? [liveUrl, videosUrl] : [liveUrl, videosUrl, watch(videoId)];
+      const result = resolveYoutubeLivePage(channel, fetchPage);
+      if (outcome === "stop") {
+        await expect(result).rejects.toThrow("page-wide access challenge");
+      } else if (route === "/videos redirect") {
+        await expect(result).rejects.toThrow("verified public video");
+      } else if (outcome === "fallback") {
+        await expect(result).resolves.toMatchObject({ videoId: replayId, title: "Own replay", isLive: false });
+        if (isLive) calls.push(videosUrl);
+        calls.push(watch(replayId));
+      } else {
+        await expect(result).resolves.toMatchObject({ videoId, title, isLive });
+      }
+      expect(fetchPage.mock.calls.map(([request]) => request)).toEqual(calls);
+    });
+  }
+}
