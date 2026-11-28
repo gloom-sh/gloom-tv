@@ -84,9 +84,62 @@ export function watchVideoId(url: URL): string | undefined {
   if (url.pathname === "/watch" && !extraIds.length && isValidYoutubeVideoId(videoId)) return videoId;
 }
 
-export function verifyWatchVideo(html: string, url: URL, channelId: string, videoId: string, isLive: boolean): VerifiedVideo | undefined {
+const BOT_CHALLENGE = /\b(?:unusual traffic|automated (?:traffic|queries)|(?:verify|confirm) (?:that )?you(?:'re| are) (?:a human|human|not a (?:bot|robot)))\b/i;
+const CONSENT_CHALLENGE = /\b(?:before you continue to (?:YouTube|Google)|review your privacy choices)\b/i;
+const SIGN_IN_CHALLENGE = /^sign in(?: required| to (?:continue(?: to (?:YouTube|Google))?|YouTube|Google)(?:[.!])?|\s*[-–|]\s*(?:YouTube|Google Accounts))?$/i;
+const SITE_SIGN_IN_COPY = /\bsign in to continue to (?:YouTube|Google)\b/i;
+
+function visibleText(markup: string): string {
+  return markup.replace(/<[^>]*>/g, " ").replace(/&(?:apos|rsquo|#39|#x27|#8217);|’/gi, "'")
+    .replace(/(?:&nbsp;|\s)+/gi, " ").trim();
+}
+
+function challengeForm(attributes: string, url: URL): boolean {
+  if (/\sid\s*=\s*(?:"captcha-form"|'captcha-form'|captcha-form)(?:\s|$)/i.test(attributes)) return true;
+  const [, doubleQuoted, singleQuoted, bare] = /\saction\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i.exec(attributes) ?? [];
+  const action = doubleQuoted ?? singleQuoted ?? bare;
+  if (!action) return false;
+  try {
+    const destination = new URL(action, url);
+    return /^(?:accounts\.google\.com|consent\.(?:youtube|google)\.com)$/.test(destination.hostname)
+      || /^\/(?:sorry|signin|servicelogin)(?:[/.]|$)/i.test(destination.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isWatchPageChallenge(html: string, url: URL, player: unknown, videoId: string): boolean {
+  const playability = field(player, "playabilityStatus");
+  const reportedId = field(player, "videoDetails", "videoId");
+  const requestedVideo = watchVideoId(url) === videoId;
+  const scoped = requestedVideo && reportedId === videoId;
+  const reason = visibleText(text(field(playability, "reason")) ?? "");
+  if (BOT_CHALLENGE.test(reason) || CONSENT_CHALLENGE.test(reason)) return true;
+  const videoOnly = requestedVideo && reportedId === undefined && /^(?:this video\b|sign in to confirm your age\b)/i.test(reason);
+  if (field(playability, "status") === "LOGIN_REQUIRED" && (SIGN_IN_CHALLENGE.test(reason) || (!scoped && !videoOnly))) return true;
+
+  const markup = html.replace(/<!--[\s\S]*?-->|<(script|style|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, " ");
+  for (const [, attributes] of markup.matchAll(/<form\b([^>]*)>/gi)) {
+    if (attributes && challengeForm(attributes, url)) return true;
+  }
+  const playerTitle = visibleText(text(field(player, "videoDetails", "title")) ?? "");
+  for (const [, , content] of markup.matchAll(/<(title|h[1-3])\b[^>]*>([\s\S]*?)<\/\1\s*>/gi)) {
+    const heading = visibleText(content ?? "");
+    if (scoped && playerTitle && heading.replace(/\s+-\s+YouTube$/i, "") === playerTitle) continue;
+    if (SIGN_IN_CHALLENGE.test(heading) || CONSENT_CHALLENGE.test(heading) || BOT_CHALLENGE.test(heading)) return true;
+  }
+  if (scoped || videoOnly) return false;
+  const body = visibleText(markup);
+  return SIGN_IN_CHALLENGE.test(body) || SITE_SIGN_IN_COPY.test(body) || CONSENT_CHALLENGE.test(body) || BOT_CHALLENGE.test(body);
+}
+
+export function verifyWatchVideo(html: string, url: URL, channelId: string, videoId: string, isLive: boolean, options?: { stopOnChallenge: boolean }): VerifiedVideo | undefined {
+  const player = initialJson(html, "ytInitialPlayerResponse");
+  if (options?.stopOnChallenge && isWatchPageChallenge(html, url, field(player, "playerResponse") ?? player, videoId)) {
+    throw new Error("YouTube returned a page-wide access challenge.");
+  }
   if (watchVideoId(url) !== videoId) return;
-  return verifyPlayerVideo(initialJson(html, "ytInitialPlayerResponse"), channelId, videoId, isLive, true);
+  return verifyPlayerVideo(player, channelId, videoId, isLive, true);
 }
 
 export function verifyPlayerVideo(payload: unknown, channelId: string, videoId: string, isLive: boolean, requiresEmbed: boolean): VerifiedVideo | undefined {

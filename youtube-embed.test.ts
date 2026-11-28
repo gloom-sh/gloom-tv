@@ -190,3 +190,74 @@ test("watch probes stop on an interstitial and the request budget is bounded", a
   await expect(resolveYoutubeLivePage(channel, empty)).rejects.toThrow("verified public video");
   expect(empty).toHaveBeenCalledTimes(8);
 });
+
+const probeGrid = { html: page({ data: channelGrid(channel.channelId, "videos", [
+  replayCard(otherId, "First candidate"), replayCard(replayId, "Eligible candidate"),
+]) }) };
+
+for (const stage of ["fetch", "body"] as const) {
+  test(`a watch probe that stalls the ${stage} is aborted and the next candidate is checked`, async () => {
+    const pages = youtubePages({}, probeGrid, publicWatch(replayId, channel.channelId, "Own replay"));
+    const resumeFetch = Promise.withResolvers<void>();
+    let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let bodyCanceled = false;
+    let signal: AbortSignal | null | undefined;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    const fetchPage = Object.assign(async (...args: Parameters<typeof fetch>) => {
+      const [url, init] = args;
+      if (url !== watch(otherId)) return pages(...args);
+      signal = init?.signal;
+      if (stage === "fetch") {
+        await resumeFetch.promise;
+        return Object.defineProperty(new Response(""), "url", { value: url });
+      }
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          bodyController = controller;
+          controller.enqueue(new TextEncoder().encode("<html>"));
+        },
+        cancel() { bodyCanceled = true; },
+      });
+      return Object.defineProperty(new Response(body), "url", { value: url });
+    }, { preconnect: fetch.preconnect });
+    try {
+      await expect(Promise.race([resolveYoutubeLivePage(channel, fetchPage), new Promise((_, reject) => {
+        watchdog = setTimeout(() => reject(new Error("The stalled watch probe did not advance")), 2800);
+      })])).resolves.toMatchObject({ videoId: replayId, title: "Own replay" });
+      if (stage === "body") expect(bodyCanceled).toBe(true);
+      expect(signal?.aborted).toBe(true);
+      expect(pages.mock.calls.map(([url]) => url).at(-1)).toBe(watch(replayId));
+    } finally {
+      clearTimeout(watchdog);
+      if (!bodyCanceled) bodyController?.close();
+      resumeFetch.resolve();
+    }
+  });
+}
+
+for (const [kind, html] of [
+  ["sign-in page", '<title>Sign in - YouTube</title><h1>Sign in</h1>'],
+  ["sign-in body", '<title>YouTube</title><main><div>Sign in to continue to YouTube</div></main>'],
+  ["consent form", '<form action="https://consent.youtube.com/save"><button>Accept all</button></form>'],
+  ["anti-bot page", '<h1>Verify you’re human</h1><form id="captcha-form" action="/sorry/index"></form>'],
+  ["unscoped login challenge", page({ player: { playabilityStatus: { status: "LOGIN_REQUIRED", reason: "Sign in to continue" } } })],
+  ["anti-bot reason in a player", page({ player: { ...playerResponse(otherId, channel.channelId), playabilityStatus: {
+    status: "LOGIN_REQUIRED", reason: "Sign in to confirm you’re not a bot",
+  } } })],
+] as const) {
+  test(`a 200 ${kind} at the watch URL stops without probing the next candidate`, async () => {
+    const fetchPage = youtubePages({}, probeGrid, { html }, publicWatch(replayId, channel.channelId, "Must not be queried"));
+    await expect(resolveYoutubeLivePage(channel, fetchPage)).rejects.toThrow("challenge");
+    expect(fetchPage).toHaveBeenCalledTimes(3);
+    expect(fetchPage.mock.calls.at(-1)?.[0]).toBe(watch(otherId));
+  });
+}
+
+test("a structured denial for the requested video still allows a verified next candidate", async () => {
+  const player = { ...playerResponse(otherId, channel.channelId, { isLive: false }), playabilityStatus: {
+    status: "LOGIN_REQUIRED", reason: "Sign in to confirm your age", errorScreen: { playerErrorMessageRenderer: {} },
+  } };
+  const fetchPage = youtubePages({}, probeGrid, { html: page({ player }) }, publicWatch(replayId, channel.channelId, "Own replay"));
+  await expect(resolveYoutubeLivePage(channel, fetchPage)).resolves.toMatchObject({ videoId: replayId, title: "Own replay" });
+  expect(fetchPage.mock.calls.slice(2).map(([url]) => url)).toEqual([watch(otherId), watch(replayId)]);
+});

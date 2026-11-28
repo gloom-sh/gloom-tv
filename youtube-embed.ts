@@ -4,6 +4,7 @@ import { gridVideoCandidates, isValidYoutubeVideoId, verifyWatchVideo, watchVide
 
 const MAX_WATCH_CHECKS = 6;
 const MAX_LIVE_WATCH_CHECKS = 3;
+const WATCH_PROBE_TIMEOUT_MS = 1500;
 
 export function buildYoutubeLiveEmbedUrl(
   videoId: string,
@@ -52,7 +53,16 @@ export function fallbackTvStream(
   };
 }
 
-async function fetchYoutubePage(url: string, fetchImpl: typeof fetch, kind: "live" | "videos" | "watch"): Promise<{ pageUrl: URL; html: string } | undefined> {
+function publicPageUrl(response: Response): URL {
+  if (response.url.startsWith("https://consent.youtube.com/")) throw new Error("YouTube returned a consent page.");
+  const pageUrl = youtubePageUrl(response.url);
+  if (!pageUrl || !/^\/(?:watch$|channel\/|@|c\/|user\/)/.test(pageUrl.pathname)) {
+    throw new Error("YouTube did not return a public channel or watch page.");
+  }
+  return pageUrl;
+}
+
+async function fetchYoutubePage(url: string, fetchImpl: typeof fetch, kind: "live" | "videos" | "watch", signal?: AbortSignal): Promise<{ pageUrl: URL; html: string } | undefined> {
   const response = await fetchImpl(url, {
     headers: {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -60,20 +70,44 @@ async function fetchYoutubePage(url: string, fetchImpl: typeof fetch, kind: "liv
       "Accept-Language": "en-US,en;q=0.9",
       ...(kind !== "watch" ? { "Cookie": "CONSENT=YES+cb.20210328-17-p0.en+FX+667" } : {}),
     },
-    ...(kind === "watch" ? { credentials: "omit" } : {}),
+    ...(kind === "watch" ? { credentials: "omit", signal } : {}),
     redirect: "follow",
   });
+  if (kind === "watch") {
+    if (signal?.aborted) {
+      void response.body?.cancel().catch(() => {});
+      return;
+    }
+    const pageUrl = publicPageUrl(response);
+    if (response.status === 404) return;
+    if (!response.ok) throw new Error(`YouTube watch page is unavailable (${response.status}).`);
+    const body = response.body?.pipeThrough(new TransformStream<Uint8Array, Uint8Array>(), { signal });
+    return { pageUrl, html: await (body ? new Response(body) : response).text() };
+  }
   const html = await response.text();
-  if (response.url.startsWith("https://consent.youtube.com/") || /Before you continue to YouTube/i.test(html)) {
+  if (/Before you continue to YouTube/i.test(html)) {
     throw new Error("YouTube returned a consent page.");
   }
-  const pageUrl = youtubePageUrl(response.url);
-  if (!pageUrl || !/^\/(?:watch$|channel\/|@|c\/|user\/)/.test(pageUrl.pathname)) {
-    throw new Error("YouTube did not return a public channel or watch page.");
-  }
+  const pageUrl = publicPageUrl(response);
   if (response.status === 404 && kind !== "videos") return;
   if (!response.ok) throw new Error(`YouTube ${kind} page is unavailable (${response.status}).`);
   return { pageUrl, html };
+}
+
+async function probeYoutubeWatch(videoId: string, fetchImpl: typeof fetch) {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), WATCH_PROBE_TIMEOUT_MS);
+      }),
+      fetchYoutubePage(`https://www.youtube.com/watch?v=${videoId}`, fetchImpl, "watch", controller.signal),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
 }
 
 export async function resolveYoutubeLivePage(
@@ -95,9 +129,9 @@ export async function resolveYoutubeLivePage(
     const candidates = gridVideoCandidates(page.html, page.pageUrl, channel.channelId, isLive);
     for (const candidate of candidates.slice(0, isLive ? MAX_LIVE_WATCH_CHECKS : checksLeft)) {
       checksLeft--;
-      const watch = await fetchYoutubePage(`https://www.youtube.com/watch?v=${candidate.videoId}`, fetchImpl, "watch");
+      const watch = await probeYoutubeWatch(candidate.videoId, fetchImpl);
       if (!watch) continue;
-      const verified = verifyWatchVideo(watch.html, watch.pageUrl, channel.channelId, candidate.videoId, isLive);
+      const verified = verifyWatchVideo(watch.html, watch.pageUrl, channel.channelId, candidate.videoId, isLive, { stopOnChallenge: true });
       if (verified) return fallbackTvStream(channel, { ...verified, publishedText: candidate.publishedText });
     }
   }
