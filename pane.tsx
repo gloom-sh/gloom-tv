@@ -40,7 +40,6 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
   const [storedChannelId, setChannelId] = usePaneSettingValue<TvChannelId>("channelId", "bloomberg");
   const channelId = TV_CHANNELS.find(({ id }) => id === storedChannelId)?.id ?? "bloomberg";
   const [media, setMedia] = useState(INITIAL_MEDIA);
-  const { stream, attempt, playbackError, playbackState } = media;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [muted, setMuted] = useState(true);
@@ -48,6 +47,7 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
   const recoveredRef = useRef(false);
   const generationRef = useRef(0);
   const channel = getTvChannel(channelId);
+  const { stream, attempt, playbackError, playbackState } = media.stream?.sourceId === channel.id ? media : INITIAL_MEDIA;
 
   // The active channel tab names the channel, so the title stays "TV". Setting
   // it also replaces the "TV: <channel>" title older versions saved in layouts.
@@ -74,6 +74,7 @@ export function TvPane({ paneId, focused, width, height }: PaneProps) {
         sourceId: channel.id, force: mode !== "initial",
       });
       if (generation !== generationRef.current) return null;
+      if (nextStream.sourceId !== channel.id) throw new Error(`${channel.name} did not return a verified stream.`);
       setMedia((current) => current.stream?.manifestUrl === nextStream.manifestUrl && current.stream.sourceId === nextStream.sourceId
         ? { ...current, stream: nextStream }
         : { ...INITIAL_MEDIA, attempt: current.attempt, stream: nextStream });

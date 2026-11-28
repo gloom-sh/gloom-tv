@@ -1,6 +1,7 @@
 import { TV_CHANNELS, type TvChannel } from "./channels";
 import type { ResolvedLiveStream } from "./types";
 import { resolveYoutubeLivePage } from "./youtube-embed";
+import { isValidYoutubeVideoId } from "./youtube-evidence";
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_LIVE_CANDIDATES = 6;
@@ -52,17 +53,43 @@ async function resolveLiveStream(channel: TvChannel): Promise<ResolvedTvStream> 
   }
 
   const liveFeed = await channelFeed.getLiveStreams();
-  const candidates = liveFeed.memo
-    .getType(module.YTNodes.LockupView)
-    .filter((item) => item.content_type === "VIDEO")
-    .slice(0, MAX_LIVE_CANDIDATES);
+  const { YTNodes } = module;
+  const browse = liveFeed.page.contents?.item();
+  const tab = liveFeed.current_tab;
+  const grid = tab?.content;
+  if (liveFeed.metadata.external_id !== channel.channelId
+    || !browse?.is(YTNodes.TwoColumnBrowseResults) || browse.tabs.filter((item) => item.selected).length !== 1
+    || !tab?.endpoint.metadata.url?.endsWith("/streams") || tab.endpoint.payload.browseId !== channel.channelId
+    || !grid?.is(YTNodes.RichGrid)) {
+    throw new Error(`${channel.name} did not return a verified live grid.`);
+  }
+  const cards = grid.contents.flatMap((item) => {
+    const card = item.is(YTNodes.RichItem) ? item.content : undefined;
+    return card?.is(YTNodes.LockupView) && card.content_type === "VIDEO" ? [card] : [];
+  });
+  const idCounts = new Map<string, number>();
+  for (const card of cards) idCounts.set(card.content_id, (idCounts.get(card.content_id) ?? 0) + 1);
 
-  for (const candidate of candidates) {
-    const info = await client.getBasicInfo(candidate.content_id, { client: "ANDROID" });
-    const manifestUrl = info.streaming_data?.hls_manifest_url;
-    if (!info.basic_info.is_live || !manifestUrl) continue;
+  for (const candidate of cards.slice(0, MAX_LIVE_CANDIDATES)) {
+    const videoId = candidate.content_id;
+    const tap = candidate.renderer_context.command_context?.on_tap;
+    const ownerParts = candidate.metadata?.metadata?.metadata_rows.flatMap((row) => row.metadata_parts ?? []) ?? [];
+    const ownerIds = ownerParts.flatMap((part) => part.text?.runs ?? []).map((run) =>
+      "endpoint" in run ? run.endpoint?.payload.browseId : undefined);
+    if (!isValidYoutubeVideoId(videoId) || idCounts.get(videoId) !== 1 || (tap && tap.payload.videoId !== videoId)
+      || ownerIds.some((owner) => typeof owner === "string" && owner.startsWith("UC") && owner !== channel.channelId)) continue;
 
-    const thumbnails = info.basic_info.thumbnail ?? [];
+    const info = await client.getBasicInfo(videoId, { client: "ANDROID" }).catch(() => null);
+    const manifestUrl = info?.streaming_data?.hls_manifest_url;
+    const details = info?.basic_info;
+    const title = details?.title?.trim();
+    if (!info || !manifestUrl || !title || details?.id !== videoId || details.channel_id !== channel.channelId
+      || (details.channel?.id !== undefined && details.channel.id !== channel.channelId)
+      || details.is_live !== true || details.is_upcoming || details.is_private || details.is_unlisted
+      || details.is_post_live_dvr || details.end_timestamp
+      || info.playability_status?.status !== "OK" || info.playability_status.error_screen) continue;
+
+    const thumbnails = details.thumbnail ?? [];
     const poster = thumbnails.reduce<(typeof thumbnails)[number] | undefined>((best, item) => {
       if (!best) return item;
       return (item.width ?? 0) * (item.height ?? 0) > (best.width ?? 0) * (best.height ?? 0) ? item : best;
@@ -73,11 +100,11 @@ async function resolveLiveStream(channel: TvChannel): Promise<ResolvedTvStream> 
     return {
       provider: "youtube",
       sourceId: channel.id,
-      videoId: candidate.content_id,
-      title: info.basic_info.title || candidate.metadata?.title?.toString() || `${channel.name} Live`,
+      videoId,
+      title,
       isLive: true,
       manifestUrl,
-      watchUrl: `https://www.youtube.com/watch?v=${candidate.content_id}`,
+      watchUrl: `https://www.youtube.com/watch?v=${videoId}`,
       posterUrl: poster?.url,
       resolvedAt,
       expiresAt,
