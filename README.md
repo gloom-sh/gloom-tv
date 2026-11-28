@@ -1,6 +1,6 @@
 # TV for Gloomberb
 
-Live Bloomberg, CNBC, and Yahoo Finance television alongside your market research. When a channel is off air, TV falls back to its latest public video and shows its publication label.
+Live Bloomberg, CNBC, and Yahoo Finance television alongside your market research. When TV can't verify a live stream, it shows the most recent verified public replay it can find, along with its publication label when available. If there's no verified video, **Open in browser** opens the publisher's public channel.
 
 ## Install
 
