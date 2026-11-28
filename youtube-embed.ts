@@ -1,6 +1,6 @@
 import type { ResolvedLiveStream } from "./types";
 import type { TvChannel } from "./channels";
-import { gridVideoCandidates, isValidYoutubeVideoId, verifyWatchVideo, watchVideoId, youtubePageUrl } from "./youtube-evidence";
+import { gridVideoCandidates, isValidYoutubeVideoId, verifyWatchVideo, youtubePageUrl } from "./youtube-evidence";
 
 const MAX_WATCH_CHECKS = 6;
 const MAX_LIVE_WATCH_CHECKS = 3;
@@ -121,9 +121,8 @@ export async function resolveYoutubeLivePage(
     if (!page) continue;
     const isLive = kind === "live";
     if (page.pageUrl.pathname === "/watch") {
-      const videoId = watchVideoId(page.pageUrl);
-      const live = isLive && videoId && verifyWatchVideo(page.html, page.pageUrl, channel.channelId, videoId, true);
-      if (live) return fallbackTvStream(channel, live);
+      const verified = verifyWatchVideo(page.html, page.pageUrl, channel.channelId, isLive);
+      if (isLive && verified) return fallbackTvStream(channel, verified);
       continue;
     }
     const candidates = gridVideoCandidates(page.html, page.pageUrl, channel.channelId, isLive);
@@ -131,7 +130,7 @@ export async function resolveYoutubeLivePage(
       checksLeft--;
       const watch = await probeYoutubeWatch(candidate.videoId, fetchImpl);
       if (!watch) continue;
-      const verified = verifyWatchVideo(watch.html, watch.pageUrl, channel.channelId, candidate.videoId, isLive, { stopOnChallenge: true });
+      const verified = verifyWatchVideo(watch.html, watch.pageUrl, channel.channelId, isLive, candidate.videoId);
       if (verified) return fallbackTvStream(channel, { ...verified, publishedText: candidate.publishedText });
     }
   }

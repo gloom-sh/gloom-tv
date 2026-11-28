@@ -79,7 +79,7 @@ function initialJson(html: string, key: "ytInitialData" | "ytInitialPlayerRespon
   return found;
 }
 
-export function watchVideoId(url: URL): string | undefined {
+function watchVideoId(url: URL): string | undefined {
   const [videoId, ...extraIds] = url.searchParams.getAll("v");
   if (url.pathname === "/watch" && !extraIds.length && isValidYoutubeVideoId(videoId)) return videoId;
 }
@@ -108,14 +108,13 @@ function challengeForm(attributes: string, url: URL): boolean {
   }
 }
 
-function isWatchPageChallenge(html: string, url: URL, player: unknown, videoId: string): boolean {
+function isWatchPageChallenge(html: string, url: URL, player: unknown, videoId: string | undefined): boolean {
   const playability = field(player, "playabilityStatus");
   const reportedId = field(player, "videoDetails", "videoId");
-  const requestedVideo = watchVideoId(url) === videoId;
-  const scoped = requestedVideo && reportedId === videoId;
+  const scoped = videoId !== undefined && reportedId === videoId;
   const reason = visibleText(text(field(playability, "reason")) ?? "");
   if (BOT_CHALLENGE.test(reason) || CONSENT_CHALLENGE.test(reason)) return true;
-  const videoOnly = requestedVideo && reportedId === undefined && /^(?:this video\b|sign in to confirm your age\b)/i.test(reason);
+  const videoOnly = videoId !== undefined && reportedId === undefined && /^(?:this video\b|sign in to confirm your age\b)/i.test(reason);
   if (field(playability, "status") === "LOGIN_REQUIRED" && (SIGN_IN_CHALLENGE.test(reason) || (!scoped && !videoOnly))) return true;
 
   const markup = html.replace(/<!--[\s\S]*?-->|<(script|style|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, " ");
@@ -133,12 +132,14 @@ function isWatchPageChallenge(html: string, url: URL, player: unknown, videoId: 
   return SIGN_IN_CHALLENGE.test(body) || SITE_SIGN_IN_COPY.test(body) || CONSENT_CHALLENGE.test(body) || BOT_CHALLENGE.test(body);
 }
 
-export function verifyWatchVideo(html: string, url: URL, channelId: string, videoId: string, isLive: boolean, options?: { stopOnChallenge: boolean }): VerifiedVideo | undefined {
+export function verifyWatchVideo(html: string, url: URL, channelId: string, isLive: boolean, expectedVideoId?: string): VerifiedVideo | undefined {
+  const urlVideoId = watchVideoId(url);
+  const videoId = expectedVideoId === undefined || expectedVideoId === urlVideoId ? urlVideoId : undefined;
   const player = initialJson(html, "ytInitialPlayerResponse");
-  if (options?.stopOnChallenge && isWatchPageChallenge(html, url, field(player, "playerResponse") ?? player, videoId)) {
+  if (isWatchPageChallenge(html, url, field(player, "playerResponse") ?? player, videoId)) {
     throw new Error("YouTube returned a page-wide access challenge.");
   }
-  if (watchVideoId(url) !== videoId) return;
+  if (!videoId) return;
   return verifyPlayerVideo(player, channelId, videoId, isLive, true);
 }
 

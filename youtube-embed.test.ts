@@ -261,3 +261,35 @@ test("a structured denial for the requested video still allows a verified next c
   await expect(resolveYoutubeLivePage(channel, fetchPage)).resolves.toMatchObject({ videoId: replayId, title: "Own replay" });
   expect(fetchPage.mock.calls.slice(2).map(([url]) => url)).toEqual([watch(otherId), watch(replayId)]);
 });
+
+for (const [kind, url, html] of [
+  ["sign-in page", watch(liveId), '<title>YouTube</title><main>Sign in to continue to YouTube</main>'],
+  ["anti-bot page with a malformed ID", watch("invalid"), '<h1>Verify you’re human</h1>'],
+  ["unscoped login challenge with no ID", "https://www.youtube.com/watch", page({ player: {
+    playabilityStatus: { status: "LOGIN_REQUIRED", reason: "Authentication required" },
+  } })],
+] as const) {
+  test(`a /live redirect to a 200 ${kind} stops before requesting /videos`, async () => {
+    const fetchPage = youtubePages({ url, html }, probeGrid, publicWatch(otherId, channel.channelId, "Must not be queried"));
+    await expect(resolveYoutubeLivePage(channel, fetchPage)).rejects.toThrow("page-wide access challenge");
+    expect(fetchPage.mock.calls.map(([request]) => request)).toEqual([`https://www.youtube.com/channel/${channel.channelId}/live`]);
+  });
+}
+
+test("a /videos redirect to a challenged watch page also hard-stops", async () => {
+  const fetchPage = youtubePages({}, { url: watch(replayId), html: '<h1>Verify you’re human</h1>' });
+  await expect(resolveYoutubeLivePage(channel, fetchPage)).rejects.toThrow("page-wide access challenge");
+  expect(fetchPage).toHaveBeenCalledTimes(2);
+});
+
+test("a video-specific denial after a /live redirect still allows a verified replay", async () => {
+  const player = { ...playerResponse(liveId, channel.channelId), playabilityStatus: {
+    status: "LOGIN_REQUIRED", reason: "Sign in to confirm your age", errorScreen: { playerErrorMessageRenderer: {} },
+  } };
+  const videos = { html: page({ data: channelGrid(channel.channelId, "videos", [replayCard(replayId, "Grid title", "3 days ago")]) }) };
+  const fetchPage = youtubePages({ url: watch(liveId), html: page({ player }) }, videos, publicWatch(replayId, channel.channelId, "Own replay"));
+  await expect(resolveYoutubeLivePage(channel, fetchPage)).resolves.toMatchObject({ videoId: replayId, title: "Own replay", isLive: false, publishedText: "3 days ago" });
+  expect(fetchPage.mock.calls.map(([request]) => request)).toEqual([
+    `https://www.youtube.com/channel/${channel.channelId}/live`, `https://www.youtube.com/channel/${channel.channelId}/videos`, watch(replayId),
+  ]);
+});
